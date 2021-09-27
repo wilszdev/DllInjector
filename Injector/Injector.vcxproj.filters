@@ -21,12 +21,15 @@
     <ClCompile Include="src\injection.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\Win32Helpers.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\injection.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="src\Win32Helpers.hpp">
+    <ClInclude Include="src\Win32Helpers.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

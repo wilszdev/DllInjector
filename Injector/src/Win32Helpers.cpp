@@ -1,17 +1,6 @@
-#pragma once
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
-#include <TlHelp32.h>
-#include <cstdio>
+#include "Win32Helpers.h"
 
-void PrintError(const char* myMsg, DWORD err);
-DWORD SetPrivilege(HANDLE hToken, LPCTSTR lpszPrivilege, BOOL bEnablePrivilege);
-void GetDebugPrivilege();
-DWORD GetProcIdByName(const char* pName);
-DWORD FindPid(const char* procName);
-
-
-void PrintError(const char* myMsg, DWORD err = -1)
+void PrintError(const char* myMsg, DWORD err)
 {
 	if (err == -1)
 	{
@@ -54,7 +43,7 @@ void GetDebugPrivilege()
 		DWORD errCode = SetPrivilege(hToken, SE_DEBUG_NAME, TRUE);
 		if (errCode != 0)
 		{
-			PrintError("failed to obtain debug privilege (method 1)", errCode);
+			PrintError("failed to obtain debug privilege", errCode);
 		}
 		else
 		{

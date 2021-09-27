@@ -57,6 +57,7 @@ BOOL WINAPI InjectedThread(HMODULE hModule)
 		}
 	}
 cleanup:
+	puts("injected dll exiting now...");
 	if (f) fclose(f);
 	FreeConsole();
 	FreeLibraryAndExitThread(hModule, 0);
