@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <comdef.h>
 
-void printError(const char* myMsg) 
+void printError(const char* myMsg)
 {
 	DWORD err = GetLastError();
 	wchar_t* msgBuf = nullptr;
@@ -14,7 +14,7 @@ void printError(const char* myMsg)
 	LocalFree(msgBuf);
 }
 
-BOOL WINAPI InjectedThread(HMODULE hModule) 
+BOOL WINAPI InjectedThread(HMODULE hModule)
 {
 	AllocConsole();
 	FILE* f = nullptr;
@@ -26,13 +26,13 @@ BOOL WINAPI InjectedThread(HMODULE hModule)
 
 	bool cmdopen = false;
 
-	while (1) 
+	while (1)
 	{
-		if (GetAsyncKeyState(VK_ESCAPE) & 0x01) 
+		if (GetAsyncKeyState(VK_ESCAPE) & 0x01)
 		{
 			goto cleanup;
 		}
-		if (GetAsyncKeyState(VK_OEM_3) & 0x01 && !cmdopen) 
+		if (GetAsyncKeyState(VK_OEM_3) & 0x01 && !cmdopen)
 		{
 			printf("[*] spawning commandline...\n");
 			// spawn process
@@ -49,7 +49,7 @@ BOOL WINAPI InjectedThread(HMODULE hModule)
 				printf("[*] command line was closed\n");
 				cmdopen = false;
 			}
-			else 
+			else
 			{
 				// error handling
 				printError("unable to spawn process");
@@ -63,20 +63,15 @@ cleanup:
 	return 0;
 }
 
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved) 
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
 {
-	switch (ul_reason_for_call)
+	if (ul_reason_for_call == DLL_PROCESS_ATTACH)
 	{
-	case DLL_PROCESS_ATTACH:
 		HANDLE hThread = CreateThread(nullptr, 0, (LPTHREAD_START_ROUTINE)InjectedThread, hModule, 0, nullptr);
 		if (hThread)
 		{
 			CloseHandle(hThread);
 		}
-	case DLL_THREAD_ATTACH:
-	case DLL_THREAD_DETACH:
-	case DLL_PROCESS_DETACH:
-		break;
 	}
 	return TRUE;
 }
