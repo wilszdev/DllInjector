@@ -26,5 +26,8 @@
     <ClInclude Include="src\injection.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\Win32Helpers.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
