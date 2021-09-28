@@ -1,17 +1,25 @@
 #include "Win32Helpers.h"
 
-void PrintError(const char* myMsg, DWORD err)
+std::string GetErrorCodeDescription(DWORD err)
 {
-	if (err == -1)
+	char* buffer = nullptr;
+	FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_IGNORE_INSERTS,
+		NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (char*)&buffer, 0, NULL);
+	// replace first CRLF with null terminator
+	for (int i = 0; buffer[i]; ++i)
 	{
-		//err = GetLastError();
-		printf(" [-] %s.", myMsg);
-		return;
+		if (buffer[i] == '\r')
+		{
+			if (buffer[i + 1] == '\n')
+			{
+				buffer[i] = 0;
+				break;
+			}
+		}
 	}
-	char* msgBuf = nullptr;
-	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (char*)&msgBuf, 0, NULL);
-	printf(" [-] %s. err: %d %s", myMsg, err, msgBuf);
-	LocalFree(msgBuf);
+	std::string result{ buffer };
+	LocalFree(buffer);
+	return result;
 }
 
 DWORD SetPrivilege(HANDLE hToken, LPCTSTR lpszPrivilege, BOOL bEnablePrivilege)
@@ -39,15 +47,15 @@ void GetDebugPrivilege()
 	HANDLE hToken;
 	if (OpenProcessToken(hProcess, TOKEN_ADJUST_PRIVILEGES, &hToken))
 	{
-		printf("[*] obtaining debug privilege...\n");
+		printf("[*] obtaining debug privilege\n");
 		DWORD errCode = SetPrivilege(hToken, SE_DEBUG_NAME, TRUE);
 		if (errCode != 0)
 		{
-			PrintError("failed to obtain debug privilege", errCode);
+			printf("\t[-] SetPrivilege failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		}
 		else
 		{
-			printf(" [+] success!\n");
+			puts("\t[+] success");
 		}
 		CloseHandle(hToken);
 	}
@@ -55,7 +63,7 @@ void GetDebugPrivilege()
 
 DWORD GetProcIdByName(const char* pName)
 {
-	DWORD procId = 0;
+	DWORD pid = 0;
 	HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 
 	if (hSnap != INVALID_HANDLE_VALUE)
@@ -68,33 +76,33 @@ DWORD GetProcIdByName(const char* pName)
 		{
 			if (!strcmp(pName, procEntry.szExeFile))
 			{
-				procId = procEntry.th32ProcessID;
+				pid = procEntry.th32ProcessID;
 				break;
 			}
 			ret = Process32Next(hSnap, &procEntry);
 		}
 	}
 	CloseHandle(hSnap);
-	return procId;
+	return pid;
 }
 
 DWORD FindPid(const char* procName)
 {
-	DWORD procId = 0;
+	DWORD pid = 0;
 	printf("[*] searching for process '%s'...\n", procName);
 	unsigned int ticks = 0;
-	while (!procId)
+	while (!pid)
 	{
 		if (ticks > 200)
 		{
 			// after approx 10 seconds
-			printf(" [-] unable to find target process\n");
+			printf("\t[-] unable to find target process\n");
 			return -1;
 		}
-		procId = GetProcIdByName(procName);
+		pid = GetProcIdByName(procName);
 		++ticks;
 		Sleep(50);
 	}
-	printf(" [+] found!\n");
-	return procId;
+	printf("\t[+] found process. pid %d\n", pid);
+	return pid;
 }

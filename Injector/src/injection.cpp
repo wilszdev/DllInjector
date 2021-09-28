@@ -1,105 +1,122 @@
 #include "injection.h"
-
-#include <iostream>
-#include <fstream>
+#include <cstdio>
 
 void LoadLibraryInject(const char* dllPath, DWORD pid)
 {
-	HANDLE hProc = 0, hThread = 0;
+	HANDLE process = 0, thread = 0;
 	DWORD exitCode = 0;
 
 	// open the process
 	printf("[*] opening process with pid %d...\n", pid);
-	hProc = OpenProcess(PROCESS_ALL_ACCESS, 0, pid);
-	if (!hProc || hProc == INVALID_HANDLE_VALUE)
+	process = OpenProcess(PROCESS_ALL_ACCESS, 0, pid);
+	if (!process || process == INVALID_HANDLE_VALUE)
 	{
-		PrintError("invalid process handle");
+		printf("\t[-] OpenProcess failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		return;
 	}
 
 	// allocate some memory
 	printf("[*] allocating memory in process...\n");
-	void* loc = VirtualAllocEx(hProc, 0, MAX_PATH, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	void* loc = VirtualAllocEx(process, 0, MAX_PATH, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 	if (!loc)
 	{
-		PrintError("memory allocation failed");
+		printf("\t[-] VirtualAllocEx failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		goto cleanup;
 	}
 
 	// write the dll path
 	printf("[*] writing dll path into memory...\n");
-	if (WriteProcessMemory(hProc, loc, dllPath, strlen(dllPath) + 1, 0) == 0)
+	if (WriteProcessMemory(process, loc, dllPath, strlen(dllPath) + 1, 0) == 0)
 	{
-		PrintError("write failed");
+		printf("\t[-] WriteProcessMemory failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		goto cleanup;
 	}
 
 	// create remote thread
 	printf("[*] creating remote thread...\n");
-	hThread = CreateRemoteThread(hProc, 0, 0, (LPTHREAD_START_ROUTINE)LoadLibraryA, loc, 0, 0);
-	if (!hThread)
+	thread = CreateRemoteThread(process, 0, 0, (LPTHREAD_START_ROUTINE)LoadLibraryA, loc, 0, 0);
+	if (!thread)
 	{
-		PrintError("failed to create remote thread");
+		printf("\t[-] CreateRemoteThread failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		goto cleanup;
 	}
 
 	// wait for it to finish
 	printf("[*] Loading DLL...\n");
-	WaitForSingleObject(hThread, INFINITE);
-	if (GetExitCodeThread(hThread, &exitCode) && exitCode == 0) {
-		PrintError("failed to load dll");
+	WaitForSingleObject(thread, INFINITE);
+
+	if (!GetExitCodeThread(thread, &exitCode))
+	{
+		puts("\t[-] failed to get exit code of injection thread");
+	}
+
+	// if LoadLibrary returns 0 (NULL), then it failed to load the module
+	if (exitCode == 0)
+	{
+		puts("\t[-] failed :(");
 	}
 	else
 	{
-		PrintError("failed to get exit code of injection thread");
+		puts("\t[+] success :)");
 	}
 
 cleanup:
-	if (hProc)
+	if (process)
 	{
-		CloseHandle(hProc);
+		CloseHandle(process);
 	}
-	if (hThread)
+	if (thread)
 	{
-		CloseHandle(hThread);
+		CloseHandle(thread);
 	}
 }
 
+#define SHARED_FILE_MAPPING_NAME "SomeRandomNameLolz"
 void ManualMappingInject(const char* dllPath, DWORD pid)
 {
+	printf("[*] opening process with pid %d...\n", pid);
 	HANDLE process = OpenProcess(PROCESS_ALL_ACCESS, 0, pid);
 	if (!process)
 	{
+		printf("\t[-] OpenProcess failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		return;
 	}
 
+	puts("[*] loading dll from disk");
 	if (GetFileAttributesA(dllPath) == INVALID_FILE_ATTRIBUTES)
 	{
-		// file doesnt exist
+		printf("\t[-] GetFileAttributes failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		return;
 	}
 
 	HANDLE file = CreateFileA(dllPath, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0);
 	if (file == INVALID_HANDLE_VALUE)
 	{
+		printf("\t[-] CreateFile failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		return;
 	}
 
-	DWORD size = GetFileSize(file, 0);
-	if (size < 0x1000)
+	DWORD fileSize = GetFileSize(file, 0);
+	// the file headers are on the first page
+	// so if the file the file is smaller than one page,
+	// it can't possibly be a valid PE file.
+	if (fileSize < 0x1000)
 	{
+		puts("\t[-] invalid file: headers less than 4096 bytes");
 		CloseHandle(file);
 		return;
 	}
 
-	BYTE* srcData = (BYTE*)VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	BYTE* srcData = (BYTE*)VirtualAlloc(0, fileSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 	if (!srcData)
 	{
+		printf("\t[-] VirtualAlloc failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		return;
 	}
 
-	if (!ReadFile(file, srcData, size, 0, 0))
+	if (!ReadFile(file, srcData, fileSize, 0, 0))
 	{
+		printf("\t[-] ReadFile failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		return;
 	}
 
@@ -109,6 +126,7 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 	IMAGE_DOS_HEADER* dosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(srcData);
 	if (dosHeader->e_magic != 0x5A4D)
 	{
+		puts("\t[-] invalid PE header");
 		VirtualFree(srcData, 0, MEM_RELEASE);
 		return;
 	}
@@ -127,21 +145,25 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 		IMAGE_FILE_MACHINE_I386)
 #endif
 	{
+		puts("\t[-] invalid architecture");
 		VirtualFree(srcData, 0, MEM_RELEASE);
 		return;
 	}
 
+	puts("[*] mapping dll into target process");
 	// allocate memory in the target process
 	// use the preferred base address of the image if possible
 	BYTE* dstData = (BYTE*)VirtualAllocEx(process, (void*)optHeader->ImageBase, optHeader->SizeOfImage,
 		MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 	if (!dstData)
 	{
+		printf("\t[-] VirtualAllocEx (1) failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		// try again, not providing an image base
 		dstData = (BYTE*)VirtualAllocEx(process, 0, optHeader->SizeOfImage,
 			MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 		if (!dstData)
 		{
+			printf("\t[-] VirtualAllocEx (2) failed: %s\n", GetLastErrorCodeDescriptionCstr());
 			VirtualFree(srcData, 0, MEM_RELEASE);
 			return;
 		}
@@ -160,7 +182,7 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 			if (!WriteProcessMemory(process, dstData + sectionHeader->VirtualAddress,
 				srcData + sectionHeader->PointerToRawData, sectionHeader->SizeOfRawData, 0))
 			{
-				// failed
+				printf("\t[-] WriteProcessMemory failed: %s\n", GetLastErrorCodeDescriptionCstr());
 				VirtualFree(srcData, 0, MEM_RELEASE);
 				VirtualFreeEx(process, dstData, 0, MEM_RELEASE);
 				return;
@@ -171,61 +193,73 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 	// store the ManualMappingInfo in the header (since we wont need the header anymore)
 	memcpy(srcData, &mmi, sizeof(mmi));
 
-	// copy headers into target process memory
+	// write headers into memory
 	if (!WriteProcessMemory(process, dstData, srcData, 0x1000, 0))
 	{
+		printf("\t[-] WriteProcessMemory failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		VirtualFreeEx(process, dstData, 0, MEM_RELEASE);
 		return;
 	}
 
 	VirtualFree(srcData, 0, MEM_RELEASE);
 
+	puts("[*] writing loader shellcode into target process");
 	// allocate one page of memory for the shellcode
-	void* shellcode = VirtualAllocEx(process, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+	size_t shellcodeSize = 0x1000;
+	void* shellcode = VirtualAllocEx(process, 0, shellcodeSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 	if (!shellcode)
 	{
+		printf("\t[-] VirtualAllocEx failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		VirtualFreeEx(process, dstData, 0, MEM_RELEASE);
 		return;
 	}
 
 	// write Loader shellcode into process memory (plus some extra, probably)
-	if (!WriteProcessMemory(process, shellcode, Loader, 0x1000, 0))
+	if (!WriteProcessMemory(process, shellcode, Loader, shellcodeSize, 0))
 	{
+		printf("\t[-] WriteProcessMemory failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		VirtualFreeEx(process, dstData, 0, MEM_RELEASE);
 		VirtualFreeEx(process, shellcode, 0, MEM_RELEASE);
 		return;
 	}
 
+	puts("[*] creating remote thread in target process");
 	HANDLE remoteThread = CreateRemoteThread(process, 0, 0,
-			// our loader technically has a different signature,
-			// but this is just so we dont need to do a bunch
-			// of casting. this way, the values are casted for us (in effect)
-			reinterpret_cast<LPTHREAD_START_ROUTINE>(shellcode),
-			dstData, 0, 0);
+		// our loader technically has a different signature,
+		// but this is just so we dont need to do a bunch
+		// of casting. this way, the values are casted for us (in effect)
+#if TARGET_SELF
+		reinterpret_cast<LPTHREAD_START_ROUTINE>(Loader),
+#else
+		reinterpret_cast<LPTHREAD_START_ROUTINE>(shellcode),
+#endif
+		dstData, 0, 0);
 	if (!remoteThread || remoteThread == INVALID_HANDLE_VALUE)
 	{
-		PrintError("CreateRemoteThread failed", GetLastError());
+		printf("\t[-] CreateRemoteThread failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		VirtualFreeEx(process, dstData, 0, MEM_RELEASE);
 		VirtualFreeEx(process, shellcode, 0, MEM_RELEASE);
 		return;
 	}
 
+	puts("[*] Loading DLL...");
+	WaitForSingleObject(remoteThread, INFINITE);
 	CloseHandle(remoteThread);
 
-	// spinlock until the loader has finished
-	HINSTANCE injectedThread = 0;
-	while (!injectedThread)
-	{
-		ManualMappingInfo mmiCheck = {};
-		ReadProcessMemory(process, dstData, &mmiCheck, sizeof(mmiCheck), 0);
-		injectedThread = mmiCheck.dllInstance;
-		Sleep(10);
-	}
+	ManualMappingInfo mmiCheck = {};
+	ReadProcessMemory(process, dstData, &mmiCheck, sizeof(mmiCheck), 0);
 
 	// can free the shellcode now
 	VirtualFreeEx(process, shellcode, 0, MEM_RELEASE);
 
-	puts("[+] success");
+	if (mmiCheck.dllInstance)
+	{
+		puts("\t[+] success :)");
+	}
+	else
+	{
+		puts("\t[-] failed :(");
+	}
 }
 
 /* Loader
@@ -239,6 +273,7 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 void __stdcall Loader(ManualMappingInfo* info)
 {
 	if (!info) return;
+
 	BYTE* imageBase = reinterpret_cast<BYTE*>(info); // because the info is stored at the image base
 
 	// because we only overwrote the very beginning of the headers, should still be able to find the location of the optional header

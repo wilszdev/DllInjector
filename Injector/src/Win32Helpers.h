@@ -4,10 +4,13 @@
 #include <TlHelp32.h>
 
 #include <cstdio>
+#include <string>
 
-void PrintError(const char* myMsg, DWORD err = -1);
+std::string GetErrorCodeDescription(DWORD err);
 DWORD SetPrivilege(HANDLE hToken, LPCTSTR lpszPrivilege, BOOL bEnablePrivilege);
 void GetDebugPrivilege();
 DWORD GetProcIdByName(const char* pName);
 DWORD FindPid(const char* procName);
 
+#define GetLastErrorCodeDescription() GetErrorCodeDescription(GetLastError())
+#define GetLastErrorCodeDescriptionCstr() GetErrorCodeDescription(GetLastError()).c_str()
