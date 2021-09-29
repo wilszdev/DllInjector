@@ -6,11 +6,14 @@
 
 BOOL WINAPI InjectedThread(HMODULE hModule)
 {
-	AllocConsole();
+	BOOL createdConsole = FALSE;
 	FILE* f = nullptr;
-	freopen_s(&f, "CONOUT$", "w", stdout);
+	if ((createdConsole = AllocConsole()) == TRUE)
+	{
+		freopen_s(&f, "CONOUT$", "w", stdout);
+	}
 
-	printf("dll injected at 0x%llX\n", (size_t)hModule);
+	printf("dll injected at 0x%p\n", (void*)hModule);
 	puts("press esc to terminate this thread (without closing the process)");
 	while (1)
 	{
@@ -21,9 +24,9 @@ BOOL WINAPI InjectedThread(HMODULE hModule)
 	}
 
 	if (f) fclose(f);
-	FreeConsole();
+	if (createdConsole) FreeConsole();
 	FreeLibraryAndExitThread(hModule, 0);
-	return 0;
+	return TRUE;
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
@@ -35,7 +38,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 		{
 			CloseHandle(hThread);
 		}
-		//MessageBoxA(NULL, "dll injected successfully!", "hello there", 0);
 	}
 	return TRUE;
 }

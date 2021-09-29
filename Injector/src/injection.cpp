@@ -1,6 +1,10 @@
 #include "injection.h"
 #include <cstdio>
 
+#if _DEBUG && _WIN64
+extern "C" void __CheckForDebuggerJustMyCode(char*);
+#endif
+
 void LoadLibraryInject(const char* dllPath, DWORD pid)
 {
 	HANDLE process = 0, thread = 0;
@@ -71,7 +75,6 @@ cleanup:
 	}
 }
 
-#define SHARED_FILE_MAPPING_NAME "SomeRandomNameLolz"
 void ManualMappingInject(const char* dllPath, DWORD pid)
 {
 	printf("[*] opening process with pid %d...\n", pid);
@@ -203,6 +206,63 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 
 	VirtualFree(srcData, 0, MEM_RELEASE);
 
+	BYTE* loader = (BYTE*)Loader;
+
+#if _DEBUG
+	puts("[*] debug build only: resolving shellcode address");
+	if (loader[0] == 0xE9)
+	{
+		// this address is actually a stub, find the actual address pls
+		printf("\t[*] located stub at 0x%p\n", loader);
+		BYTE* nextInstruction = loader + 1 + 4;
+		INT32 offset = loader[1] + (loader[2] << 8) + (loader[3] << 16) + (loader[4] << 24);
+		loader = nextInstruction + offset;
+		printf("\t[*] found shellcode at 0x%p\n", loader);
+	}
+
+#if _WIN64
+	// the /JMC compiler flag is only enabled for the x64 debug configuration
+	// so we dont need to patch the prologue in x86.
+	puts("[*] debug build only: patching function prologue");
+	for (int i = 0; i < 0x40; ++i)
+	{
+		BYTE opcode = loader[i];
+		// search for a call near instruction
+		// opcode 0xE8
+		if (opcode == 0xE8)
+		{
+			printf("\t[*] found a CALL NEAR instruction at 0x%p\n", &loader[i]);
+			// operand is 4 bytes
+			BYTE* nextInstruction = &loader[i] + 1 + 4;
+			INT32 offset = loader[i + 1] + (loader[i + 2] << 8) + (loader[i + 3] << 16) + (loader[i + 4] << 24);
+			void* dst = nextInstruction + offset;
+			if (dst == (void*)__CheckForDebuggerJustMyCode)
+			{
+				printf("\t\t[*] instruction jumps to __CheckForDebuggerJustMyCode (0x%p)\n", dst);
+				puts("\t\t[*] patching with NOPs");
+				DWORD old;
+				VirtualProtect(Loader, 0x1000, PAGE_EXECUTE_READWRITE, &old);
+
+				// we have found a call to __CheckForDebuggerJustMyCode().
+				// this won't work when injected, as the function likely
+				// isn't defined in the code segment of the target process,
+				// and almost definitely won't be at the same relative offset.
+				// so, replace the function call with NOPs (0x90).
+				loader[i++] = 0x90;
+				loader[i++] = 0x90;
+				loader[i++] = 0x90;
+				loader[i++] = 0x90;
+				loader[i++] = 0x90;
+
+				VirtualProtect(Loader, 0x1000, old, 0);
+				puts("\t[+] success");
+				break;
+			}
+		}
+	}
+#endif
+#endif
+
 	puts("[*] writing loader shellcode into target process");
 	// allocate one page of memory for the shellcode
 	size_t shellcodeSize = 0x1000;
@@ -215,7 +275,7 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 	}
 
 	// write Loader shellcode into process memory (plus some extra, probably)
-	if (!WriteProcessMemory(process, shellcode, Loader, shellcodeSize, 0))
+	if (!WriteProcessMemory(process, shellcode, loader, shellcodeSize, 0))
 	{
 		printf("\t[-] WriteProcessMemory failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		VirtualFreeEx(process, dstData, 0, MEM_RELEASE);
@@ -242,8 +302,12 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 		return;
 	}
 
-	puts("[*] Loading DLL...");
+	puts("[*] loading dll...");
 	WaitForSingleObject(remoteThread, INFINITE);
+
+	DWORD loaderExitCode = -1;
+	GetExitCodeThread(remoteThread, &loaderExitCode);
+
 	CloseHandle(remoteThread);
 
 	ManualMappingInfo mmiCheck = {};
@@ -252,13 +316,29 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 	// can free the shellcode now
 	VirtualFreeEx(process, shellcode, 0, MEM_RELEASE);
 
-	if (mmiCheck.dllInstance)
+	switch (loaderExitCode)
 	{
-		puts("\t[+] success :)");
-	}
-	else
-	{
-		puts("\t[-] failed :(");
+	case LOADER_SUCCESS:
+		puts("\t[+] loader: success");
+		return;
+	case LOADER_INVALID_ARGUMENT:
+		puts("\t[-] loader: invalid argument");
+		return;
+	case LOADER_RELOCATION_FAILED:
+		puts("\t[-] loader: relocation failed");
+		return;
+	case LOADER_IMPORTS_FAILED:
+		puts("\t[-] loader: imports failed");
+		return;
+	case LOADER_TLS_FAILED:
+		puts("\t[-] loader: TLS failed");
+		return;
+	case LOADER_DLLMAIN_FAILED:
+		puts("\t[-] loader: DllMain failed");
+		return;
+	default:
+		printf("\t[-] loader: unexpected exit code 0x%X\n", loaderExitCode);
+		break;
 	}
 }
 
@@ -270,9 +350,10 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 *		- calling TLS callbacks
 *		- calling DllMain
 */
-void __stdcall Loader(ManualMappingInfo* info)
+DWORD __stdcall Loader(ManualMappingInfo* info)
 {
-	if (!info) return;
+	if (!info)
+		return LOADER_INVALID_ARGUMENT;
 
 	BYTE* imageBase = reinterpret_cast<BYTE*>(info); // because the info is stored at the image base
 
@@ -287,7 +368,7 @@ void __stdcall Loader(ManualMappingInfo* info)
 	if (locationDelta)
 	{
 		if (!optionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size)
-			return;
+			return LOADER_RELOCATION_FAILED;
 		IMAGE_BASE_RELOCATION* relocData = reinterpret_cast<IMAGE_BASE_RELOCATION*>(
 			imageBase + optionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress);
 		while (relocData->VirtualAddress)
@@ -311,7 +392,7 @@ void __stdcall Loader(ManualMappingInfo* info)
 					// offset is given by the low 12 bits
 					int patchOffset = *relativeInfo & 0xFFF;
 					UINT_PTR* patch = reinterpret_cast<UINT_PTR*>(imageBase +
-						relocData->VirtualAddress + relocationType);
+						relocData->VirtualAddress + patchOffset);
 					*patch += reinterpret_cast<UINT_PTR>(locationDelta);
 				}
 			}
@@ -350,6 +431,10 @@ void __stdcall Loader(ManualMappingInfo* info)
 					IMAGE_IMPORT_BY_NAME* import = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(imageBase + (*thunkRef));
 					*funcRef = info->GetProcAddress(module, import->Name);
 				}
+				if (!(*funcRef))
+				{
+					return LOADER_IMPORTS_FAILED;
+				}
 			}
 		}
 	}
@@ -361,10 +446,14 @@ void __stdcall Loader(ManualMappingInfo* info)
 			imageBase + optionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].VirtualAddress);
 		PIMAGE_TLS_CALLBACK* callback = reinterpret_cast<PIMAGE_TLS_CALLBACK*>(tls->AddressOfCallBacks);
 		for (; callback && *callback; ++callback)
+			// if a callback causes issues, there isn't really anything we can do
 			(*callback)(imageBase, DLL_PROCESS_ATTACH, 0);
 	}
 
-	dllMain(imageBase, DLL_PROCESS_ATTACH, 0);
+	if (!dllMain(imageBase, DLL_PROCESS_ATTACH, 0))
+	{
+		return LOADER_DLLMAIN_FAILED;
+	}
 
-	info->dllInstance = reinterpret_cast<HINSTANCE>(imageBase);
+	return LOADER_SUCCESS;
 }

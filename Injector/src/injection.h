@@ -19,7 +19,13 @@ struct ManualMappingInfo
 	// (so the ptrs will still be valid in the remote thread)
 	LoadLibraryASignature LoadLibraryA;
 	GetProcAddressSignature GetProcAddress;
-	HINSTANCE dllInstance;
 };
 
-void __stdcall Loader(ManualMappingInfo* info);
+#define LOADER_SUCCESS				0
+#define LOADER_INVALID_ARGUMENT		1
+#define LOADER_RELOCATION_FAILED	2
+#define LOADER_IMPORTS_FAILED		3
+#define LOADER_TLS_FAILED			4
+#define LOADER_DLLMAIN_FAILED		5
+
+DWORD __stdcall Loader(ManualMappingInfo* info);

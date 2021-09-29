@@ -2,23 +2,34 @@
 
 std::string GetErrorCodeDescription(DWORD err)
 {
+	std::string result;
+
 	char* buffer = nullptr;
 	FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_IGNORE_INSERTS,
 		NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (char*)&buffer, 0, NULL);
-	// replace first CRLF with null terminator
-	for (int i = 0; buffer[i]; ++i)
+
+	if (buffer)
 	{
-		if (buffer[i] == '\r')
+		// replace first CRLF with null terminator
+		for (int i = 0; buffer && buffer[i]; ++i)
 		{
-			if (buffer[i + 1] == '\n')
+			if (buffer[i] == '\r')
 			{
-				buffer[i] = 0;
-				break;
+				if (buffer[i + 1] == '\n')
+				{
+					buffer[i] = 0;
+					break;
+				}
 			}
 		}
+		result = buffer;
+		LocalFree(buffer);
 	}
-	std::string result{ buffer };
-	LocalFree(buffer);
+	else
+	{
+		result = "failed to get error code description";
+	}
+
 	return result;
 }
 
