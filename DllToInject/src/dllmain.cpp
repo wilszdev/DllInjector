@@ -14,6 +14,13 @@ BOOL WINAPI InjectedThread(HMODULE hModule)
 	}
 
 	printf("dll injected at 0x%p\n", (void*)hModule);
+
+#if _DEBUG
+	puts("this is a debug build");
+#else
+	puts("this is a release build");
+#endif
+
 	puts("press esc to terminate this thread (without closing the process)");
 	while (1)
 	{

@@ -25,7 +25,6 @@ struct ManualMappingInfo
 #define LOADER_INVALID_ARGUMENT		1
 #define LOADER_RELOCATION_FAILED	2
 #define LOADER_IMPORTS_FAILED		3
-#define LOADER_TLS_FAILED			4
-#define LOADER_DLLMAIN_FAILED		5
+#define LOADER_DLLMAIN_FAILED		4
 
 DWORD __stdcall Loader(ManualMappingInfo* info);

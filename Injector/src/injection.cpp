@@ -85,6 +85,8 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 		return;
 	}
 
+#pragma region get dll from disk
+
 	puts("[*] loading dll from disk");
 	if (GetFileAttributesA(dllPath) == INVALID_FILE_ATTRIBUTES)
 	{
@@ -125,6 +127,10 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 
 	CloseHandle(file);
 
+#pragma endregion
+
+#pragma region validate dll
+
 	// validate image (check magic number)
 	IMAGE_DOS_HEADER* dosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(srcData);
 	if (dosHeader->e_magic != 0x5A4D)
@@ -153,6 +159,10 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 		return;
 	}
 
+#pragma endregion
+
+#pragma region writing dll into process
+
 	puts("[*] mapping dll into target process");
 	// allocate memory in the target process
 	// use the preferred base address of the image if possible
@@ -160,13 +170,13 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 		MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 	if (!dstData)
 	{
-		printf("\t[-] VirtualAllocEx (1) failed: %s\n", GetLastErrorCodeDescriptionCstr());
+		printf("\t[-] VirtualAllocEx (1 of 2) failed: %s\n", GetLastErrorCodeDescriptionCstr());
 		// try again, not providing an image base
 		dstData = (BYTE*)VirtualAllocEx(process, 0, optHeader->SizeOfImage,
 			MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 		if (!dstData)
 		{
-			printf("\t[-] VirtualAllocEx (2) failed: %s\n", GetLastErrorCodeDescriptionCstr());
+			printf("\t[-] VirtualAllocEx (2 of 2) failed: %s\n", GetLastErrorCodeDescriptionCstr());
 			VirtualFree(srcData, 0, MEM_RELEASE);
 			return;
 		}
@@ -177,15 +187,20 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 	mmi.GetProcAddress = reinterpret_cast<GetProcAddressSignature>(GetProcAddress);
 
 	// map sections into memory
+	puts("\t[*] mapping sections into memory");
 	IMAGE_SECTION_HEADER* sectionHeader = IMAGE_FIRST_SECTION(ntHeader);
 	for (int i = 0; i < fileHeader->NumberOfSections; ++i, ++sectionHeader)
 	{
 		if (sectionHeader->SizeOfRawData)
 		{
-			if (!WriteProcessMemory(process, dstData + sectionHeader->VirtualAddress,
+			if (WriteProcessMemory(process, dstData + sectionHeader->VirtualAddress,
 				srcData + sectionHeader->PointerToRawData, sectionHeader->SizeOfRawData, 0))
 			{
-				printf("\t[-] WriteProcessMemory failed: %s\n", GetLastErrorCodeDescriptionCstr());
+				printf("\t\t[+] mapped %s\n", sectionHeader->Name);
+			}
+			else
+			{
+				printf("\t\t[-] WriteProcessMemory failed: %s\n", GetLastErrorCodeDescriptionCstr());
 				VirtualFree(srcData, 0, MEM_RELEASE);
 				VirtualFreeEx(process, dstData, 0, MEM_RELEASE);
 				return;
@@ -193,8 +208,10 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 		}
 	}
 
-	// store the ManualMappingInfo in the header (since we wont need the header anymore)
-	memcpy(srcData, &mmi, sizeof(mmi));
+	// copy the info into the first few bytes of the headers.
+	// we don't need these bytes, and this saves us from needing
+	// to allocate more memory in the target process for this write.
+	*reinterpret_cast<ManualMappingInfo*>(srcData) = mmi;
 
 	// write headers into memory
 	if (!WriteProcessMemory(process, dstData, srcData, 0x1000, 0))
@@ -206,7 +223,13 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 
 	VirtualFree(srcData, 0, MEM_RELEASE);
 
+#pragma endregion
+
+#pragma region loader shellcode
+
 	BYTE* loader = (BYTE*)Loader;
+
+#pragma region fixing shellcode
 
 #if _DEBUG
 	puts("[*] debug build only: resolving shellcode address");
@@ -223,7 +246,7 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 #if _WIN64
 	// the /JMC compiler flag is only enabled for the x64 debug configuration
 	// so we dont need to patch the prologue in x86.
-	puts("[*] debug build only: patching function prologue");
+	puts("[*] x64 debug build only: patching function prologue");
 	for (int i = 0; i < 0x40; ++i)
 	{
 		BYTE opcode = loader[i];
@@ -238,8 +261,7 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 			void* dst = nextInstruction + offset;
 			if (dst == (void*)__CheckForDebuggerJustMyCode)
 			{
-				printf("\t\t[*] instruction jumps to __CheckForDebuggerJustMyCode (0x%p)\n", dst);
-				puts("\t\t[*] patching with NOPs");
+				printf("\t\t[*] instruction calls __CheckForDebuggerJustMyCode (0x%p)\n", dst);
 				DWORD old;
 				VirtualProtect(Loader, 0x1000, PAGE_EXECUTE_READWRITE, &old);
 
@@ -254,14 +276,18 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 				loader[i++] = 0x90;
 				loader[i++] = 0x90;
 
-				VirtualProtect(Loader, 0x1000, old, 0);
-				puts("\t[+] success");
+				VirtualProtect(Loader, 0x1000, old, &old);
+				puts("\t\t[+] patched with NOPs");
 				break;
 			}
 		}
 	}
 #endif
 #endif
+
+#pragma endregion
+
+#pragma region writing shellcode
 
 	puts("[*] writing loader shellcode into target process");
 	// allocate one page of memory for the shellcode
@@ -283,12 +309,21 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 		return;
 	}
 
+#pragma endregion
+
+#pragma endregion
+
+#pragma region create remote thread
+
 	puts("[*] creating remote thread in target process");
 	HANDLE remoteThread = CreateRemoteThread(process, 0, 0,
 		// our loader technically has a different signature,
 		// but this is just so we dont need to do a bunch
 		// of casting. this way, the values are casted for us (in effect)
 #if TARGET_SELF
+		// if we are targeting our own process (intended for debug builds)
+		// then we can just call the function normally, and it should work fine.
+		// this was purely for when debugging the Loader function.
 		reinterpret_cast<LPTHREAD_START_ROUTINE>(Loader),
 #else
 		reinterpret_cast<LPTHREAD_START_ROUTINE>(shellcode),
@@ -302,44 +337,47 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 		return;
 	}
 
-	puts("[*] loading dll...");
+#pragma endregion
+
+#pragma region wait for loader, display success/error messages
+
+	puts("[*] waiting for loader to finish");
 	WaitForSingleObject(remoteThread, INFINITE);
 
 	DWORD loaderExitCode = -1;
-	GetExitCodeThread(remoteThread, &loaderExitCode);
+	if (GetExitCodeThread(remoteThread, &loaderExitCode))
+	{
+		switch (loaderExitCode)
+		{
+		case LOADER_SUCCESS:
+			puts("\t[+] loader: success");
+			break;
+		case LOADER_INVALID_ARGUMENT:
+			puts("\t[-] loader: invalid argument");
+			break;
+		case LOADER_RELOCATION_FAILED:
+			puts("\t[-] loader: relocation failed");
+			break;
+		case LOADER_IMPORTS_FAILED:
+			puts("\t[-] loader: imports failed");
+			break;
+		case LOADER_DLLMAIN_FAILED:
+			puts("\t[-] loader: DllMain failed");
+			break;
+		default:
+			printf("\t[-] loader: unexpected exit code 0x%X\n", loaderExitCode);
+			break;
+		}
+	}
+	else
+	{
+		puts("\t[-] couldn't get loader exit code");
+	}
+
+#pragma endregion
 
 	CloseHandle(remoteThread);
-
-	ManualMappingInfo mmiCheck = {};
-	ReadProcessMemory(process, dstData, &mmiCheck, sizeof(mmiCheck), 0);
-
-	// can free the shellcode now
 	VirtualFreeEx(process, shellcode, 0, MEM_RELEASE);
-
-	switch (loaderExitCode)
-	{
-	case LOADER_SUCCESS:
-		puts("\t[+] loader: success");
-		return;
-	case LOADER_INVALID_ARGUMENT:
-		puts("\t[-] loader: invalid argument");
-		return;
-	case LOADER_RELOCATION_FAILED:
-		puts("\t[-] loader: relocation failed");
-		return;
-	case LOADER_IMPORTS_FAILED:
-		puts("\t[-] loader: imports failed");
-		return;
-	case LOADER_TLS_FAILED:
-		puts("\t[-] loader: TLS failed");
-		return;
-	case LOADER_DLLMAIN_FAILED:
-		puts("\t[-] loader: DllMain failed");
-		return;
-	default:
-		printf("\t[-] loader: unexpected exit code 0x%X\n", loaderExitCode);
-		break;
-	}
 }
 
 /* Loader
@@ -350,20 +388,22 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 *		- calling TLS callbacks
 *		- calling DllMain
 */
-DWORD __stdcall Loader(ManualMappingInfo* info)
+DWORD WINAPI Loader(ManualMappingInfo* info)
 {
 	if (!info)
 		return LOADER_INVALID_ARGUMENT;
 
-	BYTE* imageBase = reinterpret_cast<BYTE*>(info); // because the info is stored at the image base
+	// the info struct is located at the image base,
+	// overwriting the first few bytes of the PE headers.
+	BYTE* imageBase = reinterpret_cast<BYTE*>(info);
 
 	// because we only overwrote the very beginning of the headers, should still be able to find the location of the optional header
 	IMAGE_OPTIONAL_HEADER* optionalHeader = &reinterpret_cast<IMAGE_NT_HEADERS*>(
-		imageBase + reinterpret_cast<IMAGE_DOS_HEADER*>(info)->e_lfanew)->OptionalHeader;
+		imageBase + reinterpret_cast<IMAGE_DOS_HEADER*>(imageBase)->e_lfanew)->OptionalHeader;
 
-	auto dllMain = reinterpret_cast<DllEntryPointSignature>(imageBase + optionalHeader->AddressOfEntryPoint);
 
-	// relocation
+#pragma region relocation
+
 	BYTE* locationDelta = imageBase - optionalHeader->ImageBase;
 	if (locationDelta)
 	{
@@ -403,7 +443,10 @@ DWORD __stdcall Loader(ManualMappingInfo* info)
 		}
 	}
 
-	// resolve imports
+#pragma endregion
+
+#pragma region resolve imports
+
 	if (optionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size)
 	{
 		IMAGE_IMPORT_DESCRIPTOR* importDesc = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(
@@ -412,6 +455,12 @@ DWORD __stdcall Loader(ManualMappingInfo* info)
 		{
 			char* importedModule = reinterpret_cast<char*>(imageBase + importDesc->Name);
 			HINSTANCE module = info->LoadLibraryA(importedModule);
+
+			if (!module)
+			{
+				// LoadLibraryA failed
+				return LOADER_IMPORTS_FAILED;
+			}
 
 			ULONG_PTR* thunkRef = reinterpret_cast<ULONG_PTR*>(imageBase + importDesc->OriginalFirstThunk);
 			ULONG_PTR* funcRef = reinterpret_cast<ULONG_PTR*>(imageBase + importDesc->FirstThunk);
@@ -433,13 +482,17 @@ DWORD __stdcall Loader(ManualMappingInfo* info)
 				}
 				if (!(*funcRef))
 				{
+					// GetProcAddress failed
 					return LOADER_IMPORTS_FAILED;
 				}
 			}
 		}
 	}
 
-	// tls callbacks
+#pragma endregion
+
+#pragma region tls callbacks
+
 	if (optionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size)
 	{
 		IMAGE_TLS_DIRECTORY* tls = reinterpret_cast<IMAGE_TLS_DIRECTORY*>(
@@ -450,10 +503,17 @@ DWORD __stdcall Loader(ManualMappingInfo* info)
 			(*callback)(imageBase, DLL_PROCESS_ATTACH, 0);
 	}
 
+#pragma endregion
+	
+#pragma region dllMain
+	
+	DllEntryPointSignature dllMain = reinterpret_cast<DllEntryPointSignature>(imageBase + optionalHeader->AddressOfEntryPoint);
 	if (!dllMain(imageBase, DLL_PROCESS_ATTACH, 0))
 	{
 		return LOADER_DLLMAIN_FAILED;
 	}
+
+#pragma endregion
 
 	return LOADER_SUCCESS;
 }
