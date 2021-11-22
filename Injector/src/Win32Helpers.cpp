@@ -117,3 +117,32 @@ DWORD FindPid(const char* procName)
 	printf("\t[+] found process. pid %d\n", pid);
 	return pid;
 }
+
+int GetProcessBitness(HANDLE process)
+{
+	BOOL isWow64;
+	if (!IsWow64Process(process, &isWow64))
+	{
+		printf("[-] IsWow64Process failed: %s\n", GetLastErrorCodeDescriptionCstr());
+		return 0;
+	}
+
+	if (isWow64)
+	{
+		// 64-bit processor and 32-bit process
+		return 32;
+	}
+	else
+	{
+		// process arch is same as processor arch
+		SYSTEM_INFO sysInfo;
+		GetNativeSystemInfo(&sysInfo);
+
+		if (sysInfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_INTEL)
+			return 32;
+		else
+			return 64;
+	}
+
+	return 0;
+}

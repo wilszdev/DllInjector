@@ -144,6 +144,16 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 	IMAGE_OPTIONAL_HEADER* optHeader = &ntHeader->OptionalHeader;
 	IMAGE_FILE_HEADER* fileHeader = &ntHeader->FileHeader;
 
+	// ensure process and image bitness are same
+	int processBitness = GetProcessBitness(process);
+	if (!((fileHeader->Machine == IMAGE_FILE_MACHINE_AMD64 && processBitness == 64) ||
+		(fileHeader->Machine == IMAGE_FILE_MACHINE_I386 && processBitness == 32)))
+	{
+		puts("\t[-] process and image architectures do not match");
+		VirtualFree(srcData, 0, MEM_RELEASE);
+		return;
+	}
+
 	// validate platform
 	if (fileHeader->Machine !=
 #ifdef _WIN64
@@ -158,6 +168,8 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 		VirtualFree(srcData, 0, MEM_RELEASE);
 		return;
 	}
+
+
 
 #pragma endregion
 

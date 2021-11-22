@@ -12,5 +12,7 @@ void GetDebugPrivilege();
 DWORD GetProcIdByName(const char* pName);
 DWORD FindPid(const char* procName);
 
+int GetProcessBitness(HANDLE process);
+
 #define GetLastErrorCodeDescription() GetErrorCodeDescription(GetLastError())
 #define GetLastErrorCodeDescriptionCstr() GetErrorCodeDescription(GetLastError()).c_str()
