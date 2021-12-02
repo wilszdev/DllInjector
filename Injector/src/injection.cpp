@@ -1,8 +1,12 @@
 #include "injection.h"
 #include <cstdio>
 
-#if _DEBUG && _WIN64
+#if _DEBUG
+#if _WIN64
 extern "C" void __CheckForDebuggerJustMyCode(char*);
+#else
+extern "C" void __fastcall __CheckForDebuggerJustMyCode(int);
+#endif
 #endif
 
 void LoadLibraryInject(const char* dllPath, DWORD pid)
@@ -169,8 +173,6 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 		return;
 	}
 
-
-
 #pragma endregion
 
 #pragma region writing dll into process
@@ -255,10 +257,7 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 		printf("\t[*] found shellcode at 0x%p\n", loader);
 	}
 
-#if _WIN64
-	// the /JMC compiler flag is only enabled for the x64 debug configuration
-	// so we dont need to patch the prologue in x86.
-	puts("[*] x64 debug build only: patching function prologue");
+	puts("[*] debug build only: patching function prologue");
 	for (int i = 0; i < 0x40; ++i)
 	{
 		BYTE opcode = loader[i];
@@ -294,7 +293,6 @@ void ManualMappingInject(const char* dllPath, DWORD pid)
 			}
 		}
 	}
-#endif
 #endif
 
 #pragma endregion
@@ -413,7 +411,6 @@ DWORD WINAPI Loader(ManualMappingInfo* info)
 	IMAGE_OPTIONAL_HEADER* optionalHeader = &reinterpret_cast<IMAGE_NT_HEADERS*>(
 		imageBase + reinterpret_cast<IMAGE_DOS_HEADER*>(imageBase)->e_lfanew)->OptionalHeader;
 
-
 #pragma region relocation
 
 	BYTE* locationDelta = imageBase - optionalHeader->ImageBase;
@@ -516,9 +513,9 @@ DWORD WINAPI Loader(ManualMappingInfo* info)
 	}
 
 #pragma endregion
-	
+
 #pragma region dllMain
-	
+
 	DllEntryPointSignature dllMain = reinterpret_cast<DllEntryPointSignature>(imageBase + optionalHeader->AddressOfEntryPoint);
 	if (!dllMain(imageBase, DLL_PROCESS_ATTACH, 0))
 	{
