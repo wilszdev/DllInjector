@@ -85,7 +85,7 @@ DWORD GetProcIdByName(const char* pName)
 		BOOL ret = Process32First(hSnap, &procEntry);
 		while (ret)
 		{
-			if (!strcmp(pName, procEntry.szExeFile))
+			if (!_stricmp(pName, procEntry.szExeFile))
 			{
 				pid = procEntry.th32ProcessID;
 				break;
