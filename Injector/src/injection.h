@@ -15,8 +15,8 @@ struct ManualMappingInfo
 	// passing LoadLibraryA and GetProcAddress
 	// like this only works because these
 	// functions are in Kernel32.dll, which is
-	// imported once and shared system-wide
-	// (so the ptrs will still be valid in the remote thread)
+	// imported at same virtual address in
+	// every process
 	LoadLibraryASignature LoadLibraryA;
 	GetProcAddressSignature GetProcAddress;
 };
