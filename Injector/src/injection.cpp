@@ -517,7 +517,7 @@ DWORD WINAPI Loader(ManualMappingInfo* info)
 #pragma region dllMain
 
 	DllEntryPointSignature dllMain = reinterpret_cast<DllEntryPointSignature>(imageBase + optionalHeader->AddressOfEntryPoint);
-	if (!dllMain(imageBase, DLL_PROCESS_ATTACH, 0))
+	if (!dllMain(imageBase, DLL_PROCESS_ATTACH, (void*)0xDEADBEEF))
 	{
 		return LOADER_DLLMAIN_FAILED;
 	}
